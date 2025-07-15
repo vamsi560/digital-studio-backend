@@ -56,11 +56,8 @@ jobs:
         run: unzip release.zip
       
       - name: Login to Azure
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.CLIENTID }}
-          tenant-id: ${{ secrets.TENENTID }}
-          subscription-id: ${{ secrets.SUBSCRIPTIONID }}
+        run: |
+          az login --use-device-code
 
       - name: 'Deploy to Azure Web App'
         id: deploy-to-webapp
