@@ -8,13 +8,17 @@ import multer from 'multer';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import 'dotenv/config';
 import axios from 'axios';
-import { getFigmaData } from './figma-mcp-service.js';
 
 const app = express();
 const port = 3001;
 
 // --- Middleware Setup ---
-app.use(cors());
+// CORRECTED: Explicitly configure CORS to allow your frontend's domain.
+const corsOptions = {
+  origin: 'https://digital-studio-frontend-new.vercel.app',
+  optionsSuccessStatus: 200 // For legacy browser support
+};
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -22,7 +26,8 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
 // --- API Initialization ---
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const genAI = new GoogleGenerativeAI("AIzaSyA5_KnR58T2MTG4oOvBeAqbd8idJCdOlRA");
+const figmaApiToken = "your-figma-token-here";
 const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
 // --- Helper Functions ---
@@ -35,19 +40,14 @@ function bufferToGenerativePart(buffer, mimeType) {
   };
 }
 
-// CORRECTED: This function now safely handles non-string inputs from the AI.
 function toPascalCase(str) {
-    if (typeof str !== 'string' || !str) {
-        // If the input isn't a string, return a default name to prevent crashing.
-        return `Component${Math.floor(Math.random() * 1000)}`;
-    }
+    if (!str) return '';
     return str
         .replace(/[^a-zA-Z0-9]+/g, ' ') 
         .split(' ')
         .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
         .join('');
 }
-
 
 async function callGenerativeAI(prompt, images = [], isJsonResponse = false) {
     const contentParts = [{ text: prompt }, ...images];
@@ -198,17 +198,57 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     return allFiles;
 }
 
-
 // --- Figma API Endpoint ---
 app.post('/api/import-figma', async (req, res) => {
+    const { figmaUrl } = req.body;
+    if (!figmaUrl) {
+        return res.status(400).json({ error: 'Figma URL is required.' });
+    }
+    if (!figmaApiToken) {
+        return res.status(500).json({ error: 'Figma API token is not configured on the server.' });
+    }
+
     try {
-        const { figmaUrl } = req.body;
-        console.log(`Received request for Figma URL: ${figmaUrl}`);
-        const figmaData = await getFigmaData(figmaUrl);
-        res.json(figmaData);
+        const fileKeyMatch = figmaUrl.match(/file\/([a-zA-Z0-9]+)/);
+        if (!fileKeyMatch || !fileKeyMatch[1]) {
+            return res.status(400).json({ error: 'Invalid Figma URL format. Could not extract file key.' });
+        }
+        const fileKey = fileKeyMatch[1];
+
+        console.log(`Fetching Figma file with key: ${fileKey}`);
+        const figmaFileResponse = await axios.get(`https://api.figma.com/v1/files/${fileKey}`, {
+            headers: { 'X-Figma-Token': figmaApiToken }
+        });
+
+        const canvas = figmaFileResponse.data.document.children.find(c => c.type === 'CANVAS');
+        if (!canvas) {
+             return res.status(404).json({ error: 'No canvas found on the first page of the Figma file.' });
+        }
+
+        const frameIds = canvas.children.filter(c => c.type === 'FRAME').map(c => c.id);
+
+        if (frameIds.length === 0) {
+            return res.status(404).json({ error: 'No frames found on the first page of the Figma file.' });
+        }
+
+        console.log(`Found ${frameIds.length} frames. Fetching images...`);
+        const figmaImagesResponse = await axios.get(`https://api.figma.com/v1/images/${fileKey}?ids=${frameIds.join(',')}&format=png`, {
+            headers: { 'X-Figma-Token': figmaApiToken }
+        });
+        
+        const imageUrls = figmaImagesResponse.data.images;
+        const frameNames = canvas.children.filter(c => c.type === 'FRAME').map(c => ({id: c.id, name: c.name}));
+        
+        const result = frameNames.map(frame => ({
+            fileName: `${frame.name}.png`,
+            imageUrl: imageUrls[frame.id]
+        }));
+
+        res.json(result);
+
     } catch (error) {
-        console.error('Error in /api/import-figma:', error.message);
-        res.status(500).json({ error: error.message });
+        console.error('Error fetching from Figma API:', error.response ? error.response.data : error.message);
+        res.status(500).json({ error: 'Failed to fetch data from Figma API. Check server logs for details.' });
     }
 });
 
