@@ -40,7 +40,7 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
 // --- API Initialization ---
-const genAI = new GoogleGenerativeAI("AIzaSyA5_KnR58T2MTG4oOvBeAqbd8idJCdOlRA");
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const figmaApiToken = "your-figma-token-here";
 const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
