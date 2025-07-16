@@ -287,4 +287,3 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
 
 // Export the app for Vercel
 module.exports = app;
-s
