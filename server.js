@@ -10,7 +10,7 @@ import 'dotenv/config';
 import axios from 'axios';
 
 const app = express();
-const port = 3001;
+const port = process.env.PORT || 3001;
 
 // --- Middleware Setup ---
 // CORRECTED: Explicitly configure CORS to allow your frontend's domain.
@@ -329,5 +329,5 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
 });
 
 app.listen(port, () => {
-    console.log(`VM Digital Studio backend server listening at http://localhost:${port}`);
+    console.log(`Server running on port ${port}`);
 });
