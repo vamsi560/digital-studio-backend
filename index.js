@@ -31,7 +31,9 @@ const upload = multer({ storage: storage });
 // --- API Initialization ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const figmaApiToken = process.env.FIGMA_API_TOKEN;
-const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+// Corrected model initialization to use gemini-1.5-flash
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
 
 // --- Helper Functions ---
 function bufferToGenerativePart(buffer, mimeType) {
@@ -204,6 +206,11 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 }
 
 // --- API Routes ---
+
+// ADDED: Root route handler for Vercel health checks and general access
+app.get('/', (req, res) => {
+    res.status(200).json({ message: 'Digital Studio backend is running!' });
+});
 
 app.get('/api', (req, res) => {
     res.send('Backend server is running!');
