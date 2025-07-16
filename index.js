@@ -335,6 +335,9 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
         res.status(500).json({ error: 'An error occurred on the server during code generation.' });
     }
 });
+app.get('/', (req, res) => {
+  res.send('Backend server is running!');
+});
 
 // Export the app for Vercel
 module.exports = app;
