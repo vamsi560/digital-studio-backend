@@ -338,7 +338,3 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
         res.status(500).json({ error: 'An error occurred on the server during code generation.' });
     }
 });
-
-app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
-});
