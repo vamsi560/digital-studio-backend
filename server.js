@@ -16,7 +16,9 @@ const port = 3001;
 // CORRECTED: Explicitly configure CORS to allow your frontend's domain.
 const corsOptions = {
   origin: 'https://digital-studio-frontend-new.vercel.app',
-  optionsSuccessStatus: 200 // For legacy browser support
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
 };
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
