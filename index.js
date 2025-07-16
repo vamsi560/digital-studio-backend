@@ -9,8 +9,17 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import 'dotenv/config';
 import axios from 'axios';
 
+const express = require("express");
 const app = express();
-const port = process.env.PORT || 3001;
+
+app.use(express.json());
+
+app.get("/", (req, res) => {
+  res.send("Express on Vercel");
+});
+
+// ✅ IMPORTANT: export the app instead of listening
+module.exports = app;
 
 // --- Middleware Setup ---
 // CORRECTED: Explicitly configure CORS to allow your frontend's domain.
