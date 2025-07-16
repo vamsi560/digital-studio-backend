@@ -2,23 +2,25 @@
 // This server orchestrates multiple AI agents, handles Figma API integration,
 // and generates a complete, runnable React project scaffold.
 
-import express from 'express';
-import cors from 'cors';
-import multer from 'multer';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import 'dotenv/config';
-import axios from 'axios';
+const express = require('express');
+const cors = require('cors');
+const multer = require('multer');
+const dotenv = require('dotenv');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const axios = require('axios');
 
-const express = require("express");
+dotenv.config();
+
 const app = express();
 
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-app.get("/", (req, res) => {
-  res.send("Express on Vercel");
+app.post('/api/generate-code', async (req, res) => {
+  res.json({ message: "Express is working on Vercel!" });
 });
 
-// ✅ IMPORTANT: export the app instead of listening
+// ✅ Export the app (Vercel requirement)
 module.exports = app;
 
 // --- Middleware Setup ---
