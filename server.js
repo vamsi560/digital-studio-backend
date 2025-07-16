@@ -10,7 +10,7 @@ import 'dotenv/config';
 import axios from 'axios';
 
 const app = express();
-const port = 8080;
+const port = process.env.PORT || 3001;
 
 // --- Middleware Setup ---
 // CORRECTED: Explicitly configure CORS to allow your frontend's domain.
