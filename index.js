@@ -91,6 +91,10 @@ const getProjectFiles = (projectName, generatedFiles) => {
             'react-scripts': '5.0.1',
             'web-vitals': '^2.1.4'
         },
+        // FIXED: Added eslint-plugin-react-refresh to devDependencies
+        devDependencies: {
+            "eslint-plugin-react-refresh": "^0.4.7"
+        },
         scripts: {
             start: 'react-scripts start',
             build: 'react-scripts build',
@@ -322,11 +326,13 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
         console.log("Agent [Component Builder]: Building reusable components in a single batch...");
         const componentNames = plan.reusable_components;
         if (componentNames.length > 0) {
+            // FIXED: Updated prompt to explicitly require a default export.
             const componentBuilderPrompt = `Based on the provided UI screens, generate the React JSX code for all of the following reusable components: ${componentNames.join(', ')}.
 Your response MUST be a single JSON object.
 The keys of the object should be the component names in PascalCase (e.g., "Header", "Footer").
 The values should be the complete, raw JSX code for each corresponding component as a string.
-The components should be functional, use Tailwind CSS, and be highly reusable. Do not include any explanations, just the JSON object.`;
+The components should be functional, use Tailwind CSS, and be highly reusable.
+IMPORTANT: Each component's code MUST end with a default export statement, for example: 'export default ComponentName;'`;
 
             const properties = {};
             componentNames.forEach(name => {
