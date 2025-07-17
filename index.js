@@ -274,8 +274,17 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
         // === Step 1: Architect Agent ===
         console.log("Agent [Architect]: Analyzing project structure from images...");
         const architectPrompt = `You are an expert software architect. Analyze these UI screens holistically. Your task is to identify all distinct pages and all common, reusable components (like navbars, buttons, cards, footers, etc.). Provide your output as a single JSON object with two keys: "pages" and "reusable_components". IMPORTANT: All names must be in PascalCase.`;
-        const planJson = await callGenerativeAI(architectPrompt, imageParts, { responseMimeType: "application/json" });
-        const plan = JSON.parse(planJson);
+        
+        let plan;
+        let planJson;
+        try {
+            planJson = await callGenerativeAI(architectPrompt, imageParts, { responseMimeType: "application/json" });
+            plan = JSON.parse(planJson);
+        } catch (e) {
+            console.error("Fatal: Failed to parse JSON from Architect Agent.", e);
+            console.error("Architect Agent raw response:", planJson);
+            throw new Error("Architect Agent failed to produce valid JSON. Cannot continue.");
+        }
         
         plan.pages = plan.pages.map(toPascalCase);
         plan.reusable_components = plan.reusable_components.map(toPascalCase);
@@ -292,7 +301,6 @@ The keys of the object should be the component names in PascalCase (e.g., "Heade
 The values should be the complete, raw JSX code for each corresponding component as a string.
 The components should be functional, use Tailwind CSS, and be highly reusable. Do not include any explanations, just the JSON object.`;
 
-            // Define the dynamic schema for the expected JSON output
             const properties = {};
             componentNames.forEach(name => {
                 properties[name] = { type: "STRING" };
@@ -306,8 +314,17 @@ The components should be functional, use Tailwind CSS, and be highly reusable. D
                 },
             };
 
-            const componentsJson = await callGenerativeAI(componentBuilderPrompt, imageParts, componentSchema);
-            const components = JSON.parse(componentsJson);
+            let components;
+            let componentsJson;
+            try {
+                componentsJson = await callGenerativeAI(componentBuilderPrompt, imageParts, componentSchema);
+                components = JSON.parse(componentsJson);
+            } catch (e) {
+                console.error("Fatal: Failed to parse JSON from Component Builder Agent.", e);
+                console.error("Component Builder Agent raw response:", componentsJson);
+                throw new Error("Component Builder Agent failed to produce valid JSON. Cannot continue.");
+            }
+
 
             for (const componentName in components) {
                 const code = components[componentName];
@@ -335,22 +352,28 @@ The components should be functional, use Tailwind CSS, and be highly reusable. D
         
         // === Step 5: QA Reviewer Agent ===
         console.log("Agent [QA Reviewer]: Performing quality check...");
-        const qaSchema = {
-            responseMimeType: "application/json",
-            responseSchema: {
-                type: "OBJECT",
-                properties: {
-                    score: { type: "NUMBER" },
-                    justification: { type: "STRING" },
+        let accuracyResult;
+        let accuracyResultJson;
+        try {
+            const qaSchema = {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: "OBJECT",
+                    properties: {
+                        score: { type: "NUMBER" },
+                        justification: { type: "STRING" },
+                    },
                 },
-            },
-        };
-        const accuracyPrompt = `You are a UI/UX quality assurance expert. Compare the provided user interface image with the generated React code. Based on your analysis of layout, color, typography, and component structure, provide a percentage score representing the accuracy of the code. Also, provide a brief one-sentence justification for your score. Respond only in JSON format with the keys "score" (a number) and "justification" (a string).`;
-        const firstPageName = plan.pages[0];
-        const firstPageCode = generatedFiles[`src/pages/${firstPageName}.jsx`];
-        const accuracyResultJson = await callGenerativeAI(accuracyPrompt, [imageParts[0]], qaSchema);
-        const accuracyResult = JSON.parse(accuracyResultJson);
-        console.log("Agent [QA Reviewer]: Accuracy score calculated:", accuracyResult);
+            };
+            const accuracyPrompt = `You are a UI/UX quality assurance expert. Compare the provided user interface image with the generated React code. Based on your analysis of layout, color, typography, and component structure, provide a percentage score representing the accuracy of the code. Also, provide a brief one-sentence justification for your score. Respond only in JSON format with the keys "score" (a number) and "justification" (a string).`;
+            accuracyResultJson = await callGenerativeAI(accuracyPrompt, [imageParts[0]], qaSchema);
+            accuracyResult = JSON.parse(accuracyResultJson);
+            console.log("Agent [QA Reviewer]: Accuracy score calculated:", accuracyResult);
+        } catch (e) {
+            console.error("Non-fatal: Failed to parse JSON from QA Reviewer Agent.", e);
+            console.error("QA Reviewer Agent raw response:", accuracyResultJson);
+            accuracyResult = { score: 0, justification: "Accuracy could not be determined due to a response parsing error." };
+        }
         
         // === Final Step: Add Boilerplate Files ===
         const finalProjectFiles = getProjectFiles(projectName, generatedFiles);
@@ -359,8 +382,8 @@ The components should be functional, use Tailwind CSS, and be highly reusable. D
         res.json({ generatedFiles: finalProjectFiles, accuracyResult });
 
     } catch (error) {
-        console.error('Error during agentic code generation:', error);
-        res.status(500).json({ error: 'An error occurred on the server during code generation.' });
+        console.error('Error during agentic code generation:', error.message);
+        res.status(500).json({ error: 'An error occurred on the server during code generation. Check server logs for details.' });
     }
 });
 
