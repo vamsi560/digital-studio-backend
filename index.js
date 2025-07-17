@@ -6,7 +6,7 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const dotenv = require('dotenv');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenerativeAI, GoogleAIFileManager } = require('@google/generative-ai');
 const axios = require('axios');
 
 dotenv.config();
@@ -28,10 +28,20 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-// --- API Initialization ---
-const genAI = new GoogleGenerativeAI("AIzaSyBH27G69SVWBCA4HwfhIJvkfvKz-O7c_ck");
-const figmaApiToken = "figd_ZCTpI10vwPC5xoN5h7zKW7eZlVqmkfFF6s5qUCQO";
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+// --- API Initialization with Failover ---
+// Hardcoded API keys
+const apiKeys = "AIzaSyA5_KnR58T2MTG4oOvBeAqbd8idJCdOlRA,AIzaSyBH27G69SVWBCA4HwfhIJvkfvKz-O7c_ck".split(',').filter(k => k.trim());
+
+// Hardcoded Figma API token
+const figmaApiToken = "your-figma-api-token";
+
+// Define a list of models to try in order of preference
+const modelsToTry = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash"];
+
+if (apiKeys.length === 0) {
+    console.error("FATAL: No GEMINI_API_KEY or GEMINI_API_KEYS found in environment variables.");
+}
+
 
 // --- Helper Functions ---
 function bufferToGenerativePart(buffer, mimeType) {
@@ -54,29 +64,61 @@ function toPascalCase(str) {
         .join('');
 }
 
-async function callGenerativeAI(prompt, images = [], generationConfigOptions = {}) {
-    const contentParts = [{ text: prompt }, ...images];
-    
-    const generationConfig = { ...generationConfigOptions };
-
-    const result = await model.generateContent({ 
-        contents: [{ role: "user", parts: contentParts }],
-        generationConfig
-    });
-    const response = await result.response;
-    let text = response.text();
-    
-    if (!generationConfig.responseMimeType || generationConfig.responseMimeType !== 'application/json') {
-        text = text.replace(/```(json|javascript|jsx)?/g, '').replace(/```/g, '').trim();
+/**
+ * NEW: A robust function to call the Generative AI with retry and failover logic.
+ * It iterates through available models and API keys until a successful response is received.
+ */
+async function callGenerativeAIWithRetry(prompt, images = [], generationConfigOptions = {}) {
+    if (apiKeys.length === 0) {
+        throw new Error("Cannot call Generative AI because no API keys are configured.");
     }
-    return text;
+
+    // Iterate through each model defined in our preferred list
+    for (const modelName of modelsToTry) {
+        // For each model, iterate through each available API key
+        for (const apiKey of apiKeys) {
+            try {
+                console.log(`Attempting to call AI with model: ${modelName} and key: ...${apiKey.slice(-4)}`);
+                
+                const genAI = new GoogleGenerativeAI(apiKey);
+                const model = genAI.getGenerativeModel({ model: modelName });
+
+                const contentParts = [{ text: prompt }, ...images];
+                const generationConfig = { ...generationConfigOptions };
+                
+                const result = await model.generateContent({ 
+                    contents: [{ role: "user", parts: contentParts }],
+                    generationConfig
+                });
+                
+                const response = await result.response;
+                let text = response.text();
+                
+                if (!generationConfig.responseMimeType || generationConfig.responseMimeType !== 'application/json') {
+                    text = text.replace(/```(json|javascript|jsx)?/g, '').replace(/```/g, '').trim();
+                }
+
+                console.log(`Successfully received response using model: ${modelName}`);
+                return text; // Success! Return the response text.
+
+            } catch (error) {
+                // Log the error and prepare to retry with the next key/model
+                console.warn(`Attempt failed with model: ${modelName} and key: ...${apiKey.slice(-4)}`);
+                console.warn(`Error: ${error.message}`);
+                // Check for specific error types if needed, e.g., error.status === 429 for rate limits
+            }
+        }
+    }
+
+    // If all attempts with all keys and all models fail, throw a final error.
+    throw new Error("All attempts to call the Generative AI failed with all available models and API keys.");
 }
+
 
 // --- Boilerplate File Content ---
 const getProjectFiles = (projectName, generatedFiles) => {
     const allFiles = { ...generatedFiles };
 
-    // UPDATED: package.json to include all necessary dependencies
     allFiles['package.json'] = JSON.stringify({
         name: projectName.toLowerCase().replace(/\s+/g, '-'),
         private: true,
@@ -90,13 +132,13 @@ const getProjectFiles = (projectName, generatedFiles) => {
             'react-router-dom': '^6.22.3',
             'react-scripts': '5.0.1',
             'web-vitals': '^2.1.4',
-            'prop-types': '^15.8.1' // ADDED: prop-types for component validation
+            'prop-types': '^15.8.1' 
         },
         devDependencies: {
             "eslint-plugin-react-refresh": "^0.4.7",
-            "tailwindcss": "^3.4.3", // ADDED: Tailwind CSS
-            "postcss": "^8.4.38",     // ADDED: PostCSS
-            "autoprefixer": "^10.4.19" // ADDED: Autoprefixer
+            "tailwindcss": "^3.4.3", 
+            "postcss": "^8.4.38",     
+            "autoprefixer": "^10.4.19" 
         },
         scripts: {
             start: 'react-scripts start',
@@ -124,7 +166,6 @@ const getProjectFiles = (projectName, generatedFiles) => {
         }
     }, null, 2);
     
-    // ADDED: tailwind.config.js for Create React App
     allFiles['tailwind.config.js'] = `/** @type {import('tailwindcss').Config} */
 module.exports = {
   content: [
@@ -136,7 +177,6 @@ module.exports = {
   plugins: [],
 }`;
     
-    // ADDED: postcss.config.js for Create React App
     allFiles['postcss.config.js'] = `module.exports = {
   plugins: {
     tailwindcss: {},
@@ -144,32 +184,22 @@ module.exports = {
   },
 }`;
 
-    allFiles['README.md'] = `# ${projectName}\n\nThis project was generated by VM Digital Studio.\n\n## Available Scripts\n\nIn the project directory, you can run:\n\n### \`npm start\`\n\nRuns the app in the development mode.\nOpen [http://localhost:3000](http://localhost:3000) to view it in your browser.\n\n### \`npm test\`\n\nLaunches the test runner in the interactive watch mode.\n\n### \`npm run build\`\n\nBuilds the app for production to the \`build\` folder.`;
+    allFiles['README.md'] = `# ${projectName}\n\nThis project was generated by VM Digital Studio.`;
     
-    // UPDATED: index.html to match Create React App structure
     allFiles['public/index.html'] = `<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#000000" />
-    <meta
-      name="description"
-      content="Web site created using create-react-app"
-    />
-    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
-    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
     <title>${projectName}</title>
   </head>
   <body>
-    <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="root"></div>
   </body>
 </html>`;
     
-    // ADDED: Basic favicon and manifest for CRA
-    allFiles['public/favicon.ico'] = ''; // Placeholder for favicon
+    allFiles['public/favicon.ico'] = ''; 
     allFiles['public/manifest.json'] = JSON.stringify({
         short_name: projectName,
         name: `VM Digital Studio - ${projectName}`,
@@ -180,7 +210,6 @@ module.exports = {
     }, null, 2);
 
 
-    // UPDATED: src/index.js (was main.jsx) to match Create React App entry point
     allFiles['src/index.js'] = `import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
@@ -197,18 +226,13 @@ root.render(
   </React.StrictMode>
 );
 
-// If you want to start measuring performance in your app, pass a function
-// to log results (for example: reportWebVitals(console.log))
-// or send to an analytics endpoint. Learn more: https://bit.ly/CRA-vitals
 reportWebVitals();
 `;
 
-    // UPDATED: src/index.css to include Tailwind directives
     allFiles['src/index.css'] = `@tailwind base;
 @tailwind components;
 @tailwind utilities;`;
 
-    // ADDED: reportWebVitals.js for CRA
     allFiles['src/reportWebVitals.js'] = `const reportWebVitals = onPerfEntry => {
   if (onPerfEntry && onPerfEntry instanceof Function) {
     import('web-vitals').then(({ getCLS, getFID, getFCP, getLCP, getTTFB }) => {
@@ -233,64 +257,6 @@ app.get('/', (req, res) => {
     res.status(200).json({ message: 'Digital Studio backend is running!' });
 });
 
-app.get('/api', (req, res) => {
-    res.send('Backend server is running!');
-});
-
-app.post('/api/import-figma', async (req, res) => {
-    const { figmaUrl } = req.body;
-    if (!figmaUrl) {
-        return res.status(400).json({ error: 'Figma URL is required.' });
-    }
-    if (!figmaApiToken) {
-        return res.status(500).json({ error: 'Figma API token is not configured on the server.' });
-    }
-
-    try {
-        const fileKeyMatch = figmaUrl.match(/file\/([a-zA-Z0-9]+)/);
-        if (!fileKeyMatch || !fileKeyMatch[1]) {
-            return res.status(400).json({ error: 'Invalid Figma URL format. Could not extract file key.' });
-        }
-        const fileKey = fileKeyMatch[1];
-
-        console.log(`Fetching Figma file with key: ${fileKey}`);
-        const figmaFileResponse = await axios.get(`https://api.figma.com/v1/files/${fileKey}`, {
-            headers: { 'X-Figma-Token': figmaApiToken }
-        });
-
-        const canvas = figmaFileResponse.data.document.children.find(c => c.type === 'CANVAS');
-        if (!canvas) {
-             return res.status(404).json({ error: 'No canvas found on the first page of the Figma file.' });
-        }
-
-        const frameIds = canvas.children.filter(c => c.type === 'FRAME').map(c => c.id);
-
-        if (frameIds.length === 0) {
-            return res.status(404).json({ error: 'No frames found on the first page of the Figma file.' });
-        }
-
-        console.log(`Found ${frameIds.length} frames. Fetching images...`);
-        const figmaImagesResponse = await axios.get(`https://api.figma.com/v1/images/${fileKey}?ids=${frameIds.join(',')}&format=png`, {
-            headers: { 'X-Figma-Token': figmaApiToken }
-        });
-        
-        const imageUrls = figmaImagesResponse.data.images;
-        const frameNames = canvas.children.filter(c => c.type === 'FRAME').map(c => ({id: c.id, name: c.name}));
-        
-        const result = frameNames.map(frame => ({
-            fileName: `${frame.name}.png`,
-            imageUrl: imageUrls[frame.id]
-        }));
-
-        res.json(result);
-
-    } catch (error) {
-        console.error('Error fetching from Figma API:', error.response ? error.response.data : error.message);
-        res.status(500).json({ error: 'Failed to fetch data from Figma API. Check server logs for details.' });
-    }
-});
-
-
 app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
     console.log('Received request to /api/generate-code');
 
@@ -311,7 +277,8 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
         let plan;
         let planJson;
         try {
-            planJson = await callGenerativeAI(architectPrompt, imageParts, { responseMimeType: "application/json" });
+            // UPDATED to use the new retry function
+            planJson = await callGenerativeAIWithRetry(architectPrompt, imageParts, { responseMimeType: "application/json" });
             plan = JSON.parse(planJson);
         } catch (e) {
             console.error("Fatal: Failed to parse JSON from Architect Agent.", e);
@@ -319,7 +286,6 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
             throw new Error("Architect Agent failed to produce valid JSON. Cannot continue.");
         }
         
-        // ADDED: Defensive checks to prevent crashes on malformed AI response.
         plan.pages = Array.isArray(plan.pages) ? plan.pages.map(toPascalCase) : [];
         plan.reusable_components = Array.isArray(plan.reusable_components) ? plan.reusable_components.map(toPascalCase) : [];
 
@@ -329,7 +295,6 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
         console.log("Agent [Component Builder]: Building reusable components in a single batch...");
         const componentNames = plan.reusable_components;
         if (componentNames.length > 0) {
-            // FIXED: Updated prompt to explicitly require a default export.
             const componentBuilderPrompt = `Based on the provided UI screens, generate the React JSX code for all of the following reusable components: ${componentNames.join(', ')}.
 Your response MUST be a single JSON object.
 The keys of the object should be the component names in PascalCase (e.g., "Header", "Footer").
@@ -353,7 +318,8 @@ IMPORTANT: Each component's code MUST end with a default export statement, for e
             let components;
             let componentsJson;
             try {
-                componentsJson = await callGenerativeAI(componentBuilderPrompt, imageParts, componentSchema);
+                // UPDATED to use the new retry function
+                componentsJson = await callGenerativeAIWithRetry(componentBuilderPrompt, imageParts, componentSchema);
                 components = JSON.parse(componentsJson);
             } catch (e) {
                 console.error("Fatal: Failed to parse JSON from Component Builder Agent.", e);
@@ -375,16 +341,17 @@ IMPORTANT: Each component's code MUST end with a default export statement, for e
             console.log(` -> Building: ${pageName}`);
             const importStatements = plan.reusable_components.map(comp => `import ${comp} from '../components/${comp}';`).join('\n');
             const pagePrompt = `Generate the React JSX code for the page named "${pageName}", based on the corresponding screen design. You must import and use the available reusable components where appropriate.\n${importStatements}\nThe page should be functional, use Tailwind CSS, and correctly import components from '../components/'. Do not include any explanations, just the raw JSX code.`;
-            const pageCode = await callGenerativeAI(pagePrompt, [imageParts[i]]);
+            // UPDATED to use the new retry function
+            const pageCode = await callGenerativeAIWithRetry(pagePrompt, [imageParts[i]]);
             generatedFiles[`src/pages/${pageName}.jsx`] = pageCode;
         }
 
         // === Step 4: Finisher Agent ===
-        // ADDED: Graceful handling for cases where no pages are identified.
         if (plan.pages.length > 0) {
             console.log("Agent [Finisher]: Assembling the application...");
             const finisherPrompt = `You are an expert React developer. Create the main App.jsx component that sets up routing for the following pages using react-router-dom. You MUST import the page components using these exact names and paths:\n${plan.pages.map(p => `- import ${p} from './pages/${p}';`).join('\n')}\nCreate a simple navigation bar with a NavLink for each page. The first page, "${plan.pages[0]}", should be the home route ('/'). Do not include any explanations, just the raw JSX code.`;
-            const appRouterCode = await callGenerativeAI(finisherPrompt);
+            // UPDATED to use the new retry function
+            const appRouterCode = await callGenerativeAIWithRetry(finisherPrompt);
             generatedFiles['src/App.jsx'] = appRouterCode;
         } else {
             console.log("Agent [Finisher]: No pages found, creating a fallback App.jsx.");
@@ -392,7 +359,6 @@ IMPORTANT: Each component's code MUST end with a default export statement, for e
         }
         
         // === Step 5: QA Reviewer Agent ===
-        // ADDED: Skip QA if no pages exist to be reviewed.
         let accuracyResult = { score: 0, justification: "Skipped; no pages were generated to review." };
         if (plan.pages.length > 0) {
             console.log("Agent [QA Reviewer]: Performing quality check...");
@@ -409,7 +375,8 @@ IMPORTANT: Each component's code MUST end with a default export statement, for e
                     },
                 };
                 const accuracyPrompt = `You are a UI/UX quality assurance expert. Compare the provided user interface image with the generated React code. Based on your analysis of layout, color, typography, and component structure, provide a percentage score representing the accuracy of the code. Also, provide a brief one-sentence justification for your score. Respond only in JSON format with the keys "score" (a number) and "justification" (a string).`;
-                accuracyResultJson = await callGenerativeAI(accuracyPrompt, [imageParts[0]], qaSchema);
+                // UPDATED to use the new retry function
+                accuracyResultJson = await callGenerativeAIWithRetry(accuracyPrompt, [imageParts[0]], qaSchema);
                 accuracyResult = JSON.parse(accuracyResultJson);
                 console.log("Agent [QA Reviewer]: Accuracy score calculated:", accuracyResult);
             } catch (e) {
