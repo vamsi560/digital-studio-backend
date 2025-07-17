@@ -29,7 +29,7 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
 // --- API Initialization ---
-const genAI = new GoogleGenerativeAI("AIzaSyA5_KnR58T2MTG4oOvBeAqbd8idJCdOlRA");
+const genAI = new GoogleGenerativeAI("AIzaSyBH27G69SVWBCA4HwfhIJvkfvKz-O7c_ck");
 const figmaApiToken = "figd_ZCTpI10vwPC5xoN5h7zKW7eZlVqmkfFF6s5qUCQO";
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
