@@ -31,9 +31,7 @@ const upload = multer({ storage: storage });
 // --- API Initialization ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const figmaApiToken = process.env.FIGMA_API_TOKEN;
-// Corrected model initialization to use gemini-1.5-flash
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
 
 // --- Helper Functions ---
 function bufferToGenerativePart(buffer, mimeType) {
@@ -56,19 +54,10 @@ function toPascalCase(str) {
         .join('');
 }
 
-async function callGenerativeAI(prompt, images = [], isJsonResponse = false) {
+async function callGenerativeAI(prompt, images = [], generationConfigOptions = {}) {
     const contentParts = [{ text: prompt }, ...images];
     
-    const generationConfig = isJsonResponse ? {
-        responseMimeType: "application/json",
-        responseSchema: {
-            type: "OBJECT",
-            properties: {
-                score: { type: "NUMBER" },
-                justification: { type: "STRING" },
-            },
-        },
-    } : {};
+    const generationConfig = { ...generationConfigOptions };
 
     const result = await model.generateContent({ 
         contents: [{ role: "user", parts: contentParts }],
@@ -77,7 +66,7 @@ async function callGenerativeAI(prompt, images = [], isJsonResponse = false) {
     const response = await result.response;
     let text = response.text();
     
-    if (!isJsonResponse) {
+    if (!generationConfig.responseMimeType || generationConfig.responseMimeType !== 'application/json') {
         text = text.replace(/```(json|javascript|jsx)?/g, '').replace(/```/g, '').trim();
     }
     return text;
@@ -207,7 +196,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 
 // --- API Routes ---
 
-// ADDED: Root route handler for Vercel health checks and general access
 app.get('/', (req, res) => {
     res.status(200).json({ message: 'Digital Studio backend is running!' });
 });
@@ -286,7 +274,7 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
         // === Step 1: Architect Agent ===
         console.log("Agent [Architect]: Analyzing project structure from images...");
         const architectPrompt = `You are an expert software architect. Analyze these UI screens holistically. Your task is to identify all distinct pages and all common, reusable components (like navbars, buttons, cards, footers, etc.). Provide your output as a single JSON object with two keys: "pages" and "reusable_components". IMPORTANT: All names must be in PascalCase.`;
-        const planJson = await callGenerativeAI(architectPrompt, imageParts);
+        const planJson = await callGenerativeAI(architectPrompt, imageParts, { responseMimeType: "application/json" });
         const plan = JSON.parse(planJson);
         
         plan.pages = plan.pages.map(toPascalCase);
@@ -294,13 +282,38 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
 
         console.log("Agent [Architect]: Plan created:", plan);
 
-        // === Step 2: Component Builder Agent ===
-        console.log("Agent [Component Builder]: Building reusable components...");
-        for (const componentName of plan.reusable_components) {
-            console.log(` -> Building: ${componentName}`);
-            const componentPrompt = `Based on the provided UI screens, generate the React JSX code for the reusable component named "${componentName}". The component should be functional, use Tailwind CSS, and be highly reusable. Do not include any explanations, just the raw JSX code for the component.`;
-            const componentCode = await callGenerativeAI(componentPrompt, imageParts);
-            generatedFiles[`src/components/${componentName}.jsx`] = componentCode;
+        // === Step 2: Component Builder Agent (BATCHED) ===
+        console.log("Agent [Component Builder]: Building reusable components in a single batch...");
+        const componentNames = plan.reusable_components;
+        if (componentNames.length > 0) {
+            const componentBuilderPrompt = `Based on the provided UI screens, generate the React JSX code for all of the following reusable components: ${componentNames.join(', ')}.
+Your response MUST be a single JSON object.
+The keys of the object should be the component names in PascalCase (e.g., "Header", "Footer").
+The values should be the complete, raw JSX code for each corresponding component as a string.
+The components should be functional, use Tailwind CSS, and be highly reusable. Do not include any explanations, just the JSON object.`;
+
+            // Define the dynamic schema for the expected JSON output
+            const properties = {};
+            componentNames.forEach(name => {
+                properties[name] = { type: "STRING" };
+            });
+
+            const componentSchema = {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: "OBJECT",
+                    properties: properties,
+                },
+            };
+
+            const componentsJson = await callGenerativeAI(componentBuilderPrompt, imageParts, componentSchema);
+            const components = JSON.parse(componentsJson);
+
+            for (const componentName in components) {
+                const code = components[componentName];
+                generatedFiles[`src/components/${componentName}.jsx`] = code;
+                console.log(` -> Built: ${componentName}`);
+            }
         }
 
         // === Step 3: Page Composer Agent ===
@@ -322,10 +335,20 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
         
         // === Step 5: QA Reviewer Agent ===
         console.log("Agent [QA Reviewer]: Performing quality check...");
+        const qaSchema = {
+            responseMimeType: "application/json",
+            responseSchema: {
+                type: "OBJECT",
+                properties: {
+                    score: { type: "NUMBER" },
+                    justification: { type: "STRING" },
+                },
+            },
+        };
         const accuracyPrompt = `You are a UI/UX quality assurance expert. Compare the provided user interface image with the generated React code. Based on your analysis of layout, color, typography, and component structure, provide a percentage score representing the accuracy of the code. Also, provide a brief one-sentence justification for your score. Respond only in JSON format with the keys "score" (a number) and "justification" (a string).`;
         const firstPageName = plan.pages[0];
         const firstPageCode = generatedFiles[`src/pages/${firstPageName}.jsx`];
-        const accuracyResultJson = await callGenerativeAI(accuracyPrompt, [imageParts[0]], true);
+        const accuracyResultJson = await callGenerativeAI(accuracyPrompt, [imageParts[0]], qaSchema);
         const accuracyResult = JSON.parse(accuracyResultJson);
         console.log("Agent [QA Reviewer]: Accuracy score calculated:", accuracyResult);
         
