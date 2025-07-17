@@ -286,8 +286,9 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
             throw new Error("Architect Agent failed to produce valid JSON. Cannot continue.");
         }
         
-        plan.pages = plan.pages.map(toPascalCase);
-        plan.reusable_components = plan.reusable_components.map(toPascalCase);
+        // ADDED: Defensive checks to prevent crashes on malformed AI response.
+        plan.pages = Array.isArray(plan.pages) ? plan.pages.map(toPascalCase) : [];
+        plan.reusable_components = Array.isArray(plan.reusable_components) ? plan.reusable_components.map(toPascalCase) : [];
 
         console.log("Agent [Architect]: Plan created:", plan);
 
@@ -325,7 +326,6 @@ The components should be functional, use Tailwind CSS, and be highly reusable. D
                 throw new Error("Component Builder Agent failed to produce valid JSON. Cannot continue.");
             }
 
-
             for (const componentName in components) {
                 const code = components[componentName];
                 generatedFiles[`src/components/${componentName}.jsx`] = code;
@@ -345,34 +345,45 @@ The components should be functional, use Tailwind CSS, and be highly reusable. D
         }
 
         // === Step 4: Finisher Agent ===
-        console.log("Agent [Finisher]: Assembling the application...");
-        const finisherPrompt = `You are an expert React developer. Create the main App.jsx component that sets up routing for the following pages using react-router-dom. You MUST import the page components using these exact names and paths:\n${plan.pages.map(p => `- import ${p} from './pages/${p}';`).join('\n')}\nCreate a simple navigation bar with a NavLink for each page. The first page, "${plan.pages[0]}", should be the home route ('/'). Do not include any explanations, just the raw JSX code.`;
-        const appRouterCode = await callGenerativeAI(finisherPrompt);
-        generatedFiles['src/App.jsx'] = appRouterCode;
+        // ADDED: Graceful handling for cases where no pages are identified.
+        if (plan.pages.length > 0) {
+            console.log("Agent [Finisher]: Assembling the application...");
+            const finisherPrompt = `You are an expert React developer. Create the main App.jsx component that sets up routing for the following pages using react-router-dom. You MUST import the page components using these exact names and paths:\n${plan.pages.map(p => `- import ${p} from './pages/${p}';`).join('\n')}\nCreate a simple navigation bar with a NavLink for each page. The first page, "${plan.pages[0]}", should be the home route ('/'). Do not include any explanations, just the raw JSX code.`;
+            const appRouterCode = await callGenerativeAI(finisherPrompt);
+            generatedFiles['src/App.jsx'] = appRouterCode;
+        } else {
+            console.log("Agent [Finisher]: No pages found, creating a fallback App.jsx.");
+            generatedFiles['src/App.jsx'] = `import React from 'react';\n\nfunction App() {\n  return (\n    <div style={{ padding: '2rem', textAlign: 'center' }}>\n      <h1>Code Generation Incomplete</h1>\n      <p>The AI architect did not identify any pages from the provided images. Please try again with different images.</p>\n    </div>\n  );\n}\n\nexport default App;`;
+        }
         
         // === Step 5: QA Reviewer Agent ===
-        console.log("Agent [QA Reviewer]: Performing quality check...");
-        let accuracyResult;
-        let accuracyResultJson;
-        try {
-            const qaSchema = {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: "OBJECT",
-                    properties: {
-                        score: { type: "NUMBER" },
-                        justification: { type: "STRING" },
+        // ADDED: Skip QA if no pages exist to be reviewed.
+        let accuracyResult = { score: 0, justification: "Skipped; no pages were generated to review." };
+        if (plan.pages.length > 0) {
+            console.log("Agent [QA Reviewer]: Performing quality check...");
+            let accuracyResultJson;
+            try {
+                const qaSchema = {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            score: { type: "NUMBER" },
+                            justification: { type: "STRING" },
+                        },
                     },
-                },
-            };
-            const accuracyPrompt = `You are a UI/UX quality assurance expert. Compare the provided user interface image with the generated React code. Based on your analysis of layout, color, typography, and component structure, provide a percentage score representing the accuracy of the code. Also, provide a brief one-sentence justification for your score. Respond only in JSON format with the keys "score" (a number) and "justification" (a string).`;
-            accuracyResultJson = await callGenerativeAI(accuracyPrompt, [imageParts[0]], qaSchema);
-            accuracyResult = JSON.parse(accuracyResultJson);
-            console.log("Agent [QA Reviewer]: Accuracy score calculated:", accuracyResult);
-        } catch (e) {
-            console.error("Non-fatal: Failed to parse JSON from QA Reviewer Agent.", e);
-            console.error("QA Reviewer Agent raw response:", accuracyResultJson);
-            accuracyResult = { score: 0, justification: "Accuracy could not be determined due to a response parsing error." };
+                };
+                const accuracyPrompt = `You are a UI/UX quality assurance expert. Compare the provided user interface image with the generated React code. Based on your analysis of layout, color, typography, and component structure, provide a percentage score representing the accuracy of the code. Also, provide a brief one-sentence justification for your score. Respond only in JSON format with the keys "score" (a number) and "justification" (a string).`;
+                accuracyResultJson = await callGenerativeAI(accuracyPrompt, [imageParts[0]], qaSchema);
+                accuracyResult = JSON.parse(accuracyResultJson);
+                console.log("Agent [QA Reviewer]: Accuracy score calculated:", accuracyResult);
+            } catch (e) {
+                console.error("Non-fatal: Failed to parse JSON from QA Reviewer Agent.", e);
+                console.error("QA Reviewer Agent raw response:", accuracyResultJson);
+                accuracyResult = { score: 0, justification: "Accuracy could not be determined due to a response parsing error." };
+            }
+        } else {
+             console.log("Agent [QA Reviewer]: No pages found, skipping quality check.");
         }
         
         // === Final Step: Add Boilerplate Files ===
