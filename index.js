@@ -33,7 +33,7 @@ const upload = multer({ storage: storage });
 const apiKeys = "AIzaSyA5_KnR58T2MTG4oOvBeAqbd8idJCdOlRA,AIzaSyBH27G69SVWBCA4HwfhIJvkfvKz-O7c_ck".split(',').filter(k => k.trim());
 
 // Hardcoded Figma API token
-const figmaApiToken = "your-figma-api-token";
+const figmaApiToken = "figd_ZCTpI10vwPC5xoN5h7zKW7eZlVqmkfFF6s5qUCQO";
 
 // Define a list of models to try in order of preference
 const modelsToTry = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash"];
@@ -349,7 +349,22 @@ IMPORTANT: Each component's code MUST end with a default export statement, for e
         // === Step 4: Finisher Agent ===
         if (plan.pages.length > 0) {
             console.log("Agent [Finisher]: Assembling the application...");
-            const finisherPrompt = `You are an expert React developer. Create the main App.jsx component that sets up routing for the following pages using react-router-dom. You MUST import the page components using these exact names and paths:\n${plan.pages.map(p => `- import ${p} from './pages/${p}';`).join('\n')}\nCreate a simple navigation bar with a NavLink for each page. The first page, "${plan.pages[0]}", should be the home route ('/'). Do not include any explanations, just the raw JSX code.`;
+            // FIXED: More robust prompt for the Finisher Agent to prevent router errors.
+            const finisherPrompt = `You are an expert React developer. Your task is to create the main App.jsx component.
+This component will be wrapped by a <BrowserRouter> in index.js, so you MUST NOT include your own <BrowserRouter> in App.jsx.
+You MUST set up routing for the following pages using react-router-dom:
+${plan.pages.map(p => `- ${p}`).join('\n')}
+
+Follow these instructions exactly:
+1. Import React, { Routes, Route, NavLink } from 'react-router-dom'.
+2. Import all page components using their exact names and paths, like: 'import PageName from "./pages/PageName";'.
+3. The component function should be named 'App'.
+4. Inside the App component, create a navigation bar using <nav> and <NavLink> for each page.
+5. The NavLink 'to' prop for the first page, "${plan.pages[0]}", must be "/". For all other pages, the 'to' prop should be the page name in lowercase (e.g., "/pagename").
+6. After the navigation, use the <Routes> component to define the routes.
+7. Inside <Routes>, create a <Route> for each page. The 'path' prop must match the NavLink 'to' prop. The 'element' prop should be the page component (e.g., <PageName />).
+8. Do not include any explanations, just the raw JSX code for the App.jsx file.
+9. End the file with 'export default App;'.`;
             // UPDATED to use the new retry function
             const appRouterCode = await callGenerativeAIWithRetry(finisherPrompt);
             generatedFiles['src/App.jsx'] = appRouterCode;
