@@ -31,9 +31,7 @@ const upload = multer({ storage: storage });
 // --- API Initialization ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const figmaApiToken = process.env.FIGMA_API_TOKEN;
-// Corrected model initialization to use gemini-1.5-flash
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
 
 // --- Helper Functions ---
 function bufferToGenerativePart(buffer, mimeType) {
@@ -56,19 +54,10 @@ function toPascalCase(str) {
         .join('');
 }
 
-async function callGenerativeAI(prompt, images = [], isJsonResponse = false) {
+async function callGenerativeAI(prompt, images = [], generationConfigOptions = {}) {
     const contentParts = [{ text: prompt }, ...images];
     
-    const generationConfig = isJsonResponse ? {
-        responseMimeType: "application/json",
-        responseSchema: {
-            type: "OBJECT",
-            properties: {
-                score: { type: "NUMBER" },
-                justification: { type: "STRING" },
-            },
-        },
-    } : {};
+    const generationConfig = { ...generationConfigOptions };
 
     const result = await model.generateContent({ 
         contents: [{ role: "user", parts: contentParts }],
@@ -77,7 +66,7 @@ async function callGenerativeAI(prompt, images = [], isJsonResponse = false) {
     const response = await result.response;
     let text = response.text();
     
-    if (!isJsonResponse) {
+    if (!generationConfig.responseMimeType || generationConfig.responseMimeType !== 'application/json') {
         text = text.replace(/```(json|javascript|jsx)?/g, '').replace(/```/g, '').trim();
     }
     return text;
@@ -207,7 +196,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 
 // --- API Routes ---
 
-// ADDED: Root route handler for Vercel health checks and general access
 app.get('/', (req, res) => {
     res.status(200).json({ message: 'Digital Studio backend is running!' });
 });
@@ -286,21 +274,63 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
         // === Step 1: Architect Agent ===
         console.log("Agent [Architect]: Analyzing project structure from images...");
         const architectPrompt = `You are an expert software architect. Analyze these UI screens holistically. Your task is to identify all distinct pages and all common, reusable components (like navbars, buttons, cards, footers, etc.). Provide your output as a single JSON object with two keys: "pages" and "reusable_components". IMPORTANT: All names must be in PascalCase.`;
-        const planJson = await callGenerativeAI(architectPrompt, imageParts);
-        const plan = JSON.parse(planJson);
         
-        plan.pages = plan.pages.map(toPascalCase);
-        plan.reusable_components = plan.reusable_components.map(toPascalCase);
+        let plan;
+        let planJson;
+        try {
+            planJson = await callGenerativeAI(architectPrompt, imageParts, { responseMimeType: "application/json" });
+            plan = JSON.parse(planJson);
+        } catch (e) {
+            console.error("Fatal: Failed to parse JSON from Architect Agent.", e);
+            console.error("Architect Agent raw response:", planJson);
+            throw new Error("Architect Agent failed to produce valid JSON. Cannot continue.");
+        }
+        
+        // ADDED: Defensive checks to prevent crashes on malformed AI response.
+        plan.pages = Array.isArray(plan.pages) ? plan.pages.map(toPascalCase) : [];
+        plan.reusable_components = Array.isArray(plan.reusable_components) ? plan.reusable_components.map(toPascalCase) : [];
 
         console.log("Agent [Architect]: Plan created:", plan);
 
-        // === Step 2: Component Builder Agent ===
-        console.log("Agent [Component Builder]: Building reusable components...");
-        for (const componentName of plan.reusable_components) {
-            console.log(` -> Building: ${componentName}`);
-            const componentPrompt = `Based on the provided UI screens, generate the React JSX code for the reusable component named "${componentName}". The component should be functional, use Tailwind CSS, and be highly reusable. Do not include any explanations, just the raw JSX code for the component.`;
-            const componentCode = await callGenerativeAI(componentPrompt, imageParts);
-            generatedFiles[`src/components/${componentName}.jsx`] = componentCode;
+        // === Step 2: Component Builder Agent (BATCHED) ===
+        console.log("Agent [Component Builder]: Building reusable components in a single batch...");
+        const componentNames = plan.reusable_components;
+        if (componentNames.length > 0) {
+            const componentBuilderPrompt = `Based on the provided UI screens, generate the React JSX code for all of the following reusable components: ${componentNames.join(', ')}.
+Your response MUST be a single JSON object.
+The keys of the object should be the component names in PascalCase (e.g., "Header", "Footer").
+The values should be the complete, raw JSX code for each corresponding component as a string.
+The components should be functional, use Tailwind CSS, and be highly reusable. Do not include any explanations, just the JSON object.`;
+
+            const properties = {};
+            componentNames.forEach(name => {
+                properties[name] = { type: "STRING" };
+            });
+
+            const componentSchema = {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: "OBJECT",
+                    properties: properties,
+                },
+            };
+
+            let components;
+            let componentsJson;
+            try {
+                componentsJson = await callGenerativeAI(componentBuilderPrompt, imageParts, componentSchema);
+                components = JSON.parse(componentsJson);
+            } catch (e) {
+                console.error("Fatal: Failed to parse JSON from Component Builder Agent.", e);
+                console.error("Component Builder Agent raw response:", componentsJson);
+                throw new Error("Component Builder Agent failed to produce valid JSON. Cannot continue.");
+            }
+
+            for (const componentName in components) {
+                const code = components[componentName];
+                generatedFiles[`src/components/${componentName}.jsx`] = code;
+                console.log(` -> Built: ${componentName}`);
+            }
         }
 
         // === Step 3: Page Composer Agent ===
@@ -315,19 +345,46 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
         }
 
         // === Step 4: Finisher Agent ===
-        console.log("Agent [Finisher]: Assembling the application...");
-        const finisherPrompt = `You are an expert React developer. Create the main App.jsx component that sets up routing for the following pages using react-router-dom. You MUST import the page components using these exact names and paths:\n${plan.pages.map(p => `- import ${p} from './pages/${p}';`).join('\n')}\nCreate a simple navigation bar with a NavLink for each page. The first page, "${plan.pages[0]}", should be the home route ('/'). Do not include any explanations, just the raw JSX code.`;
-        const appRouterCode = await callGenerativeAI(finisherPrompt);
-        generatedFiles['src/App.jsx'] = appRouterCode;
+        // ADDED: Graceful handling for cases where no pages are identified.
+        if (plan.pages.length > 0) {
+            console.log("Agent [Finisher]: Assembling the application...");
+            const finisherPrompt = `You are an expert React developer. Create the main App.jsx component that sets up routing for the following pages using react-router-dom. You MUST import the page components using these exact names and paths:\n${plan.pages.map(p => `- import ${p} from './pages/${p}';`).join('\n')}\nCreate a simple navigation bar with a NavLink for each page. The first page, "${plan.pages[0]}", should be the home route ('/'). Do not include any explanations, just the raw JSX code.`;
+            const appRouterCode = await callGenerativeAI(finisherPrompt);
+            generatedFiles['src/App.jsx'] = appRouterCode;
+        } else {
+            console.log("Agent [Finisher]: No pages found, creating a fallback App.jsx.");
+            generatedFiles['src/App.jsx'] = `import React from 'react';\n\nfunction App() {\n  return (\n    <div style={{ padding: '2rem', textAlign: 'center' }}>\n      <h1>Code Generation Incomplete</h1>\n      <p>The AI architect did not identify any pages from the provided images. Please try again with different images.</p>\n    </div>\n  );\n}\n\nexport default App;`;
+        }
         
         // === Step 5: QA Reviewer Agent ===
-        console.log("Agent [QA Reviewer]: Performing quality check...");
-        const accuracyPrompt = `You are a UI/UX quality assurance expert. Compare the provided user interface image with the generated React code. Based on your analysis of layout, color, typography, and component structure, provide a percentage score representing the accuracy of the code. Also, provide a brief one-sentence justification for your score. Respond only in JSON format with the keys "score" (a number) and "justification" (a string).`;
-        const firstPageName = plan.pages[0];
-        const firstPageCode = generatedFiles[`src/pages/${firstPageName}.jsx`];
-        const accuracyResultJson = await callGenerativeAI(accuracyPrompt, [imageParts[0]], true);
-        const accuracyResult = JSON.parse(accuracyResultJson);
-        console.log("Agent [QA Reviewer]: Accuracy score calculated:", accuracyResult);
+        // ADDED: Skip QA if no pages exist to be reviewed.
+        let accuracyResult = { score: 0, justification: "Skipped; no pages were generated to review." };
+        if (plan.pages.length > 0) {
+            console.log("Agent [QA Reviewer]: Performing quality check...");
+            let accuracyResultJson;
+            try {
+                const qaSchema = {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            score: { type: "NUMBER" },
+                            justification: { type: "STRING" },
+                        },
+                    },
+                };
+                const accuracyPrompt = `You are a UI/UX quality assurance expert. Compare the provided user interface image with the generated React code. Based on your analysis of layout, color, typography, and component structure, provide a percentage score representing the accuracy of the code. Also, provide a brief one-sentence justification for your score. Respond only in JSON format with the keys "score" (a number) and "justification" (a string).`;
+                accuracyResultJson = await callGenerativeAI(accuracyPrompt, [imageParts[0]], qaSchema);
+                accuracyResult = JSON.parse(accuracyResultJson);
+                console.log("Agent [QA Reviewer]: Accuracy score calculated:", accuracyResult);
+            } catch (e) {
+                console.error("Non-fatal: Failed to parse JSON from QA Reviewer Agent.", e);
+                console.error("QA Reviewer Agent raw response:", accuracyResultJson);
+                accuracyResult = { score: 0, justification: "Accuracy could not be determined due to a response parsing error." };
+            }
+        } else {
+             console.log("Agent [QA Reviewer]: No pages found, skipping quality check.");
+        }
         
         // === Final Step: Add Boilerplate Files ===
         const finalProjectFiles = getProjectFiles(projectName, generatedFiles);
@@ -336,8 +393,8 @@ app.post('/api/generate-code', upload.array('screens'), async (req, res) => {
         res.json({ generatedFiles: finalProjectFiles, accuracyResult });
 
     } catch (error) {
-        console.error('Error during agentic code generation:', error);
-        res.status(500).json({ error: 'An error occurred on the server during code generation.' });
+        console.error('Error during agentic code generation:', error.message);
+        res.status(500).json({ error: 'An error occurred on the server during code generation. Check server logs for details.' });
     }
 });
 
