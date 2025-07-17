@@ -76,7 +76,7 @@ async function callGenerativeAI(prompt, images = [], generationConfigOptions = {
 const getProjectFiles = (projectName, generatedFiles) => {
     const allFiles = { ...generatedFiles };
 
-    // UPDATED: package.json to use react-scripts (Create React App)
+    // UPDATED: package.json to include all necessary dependencies
     allFiles['package.json'] = JSON.stringify({
         name: projectName.toLowerCase().replace(/\s+/g, '-'),
         private: true,
@@ -89,11 +89,14 @@ const getProjectFiles = (projectName, generatedFiles) => {
             'react-dom': '^18.2.0',
             'react-router-dom': '^6.22.3',
             'react-scripts': '5.0.1',
-            'web-vitals': '^2.1.4'
+            'web-vitals': '^2.1.4',
+            'prop-types': '^15.8.1' // ADDED: prop-types for component validation
         },
-        // FIXED: Added eslint-plugin-react-refresh to devDependencies
         devDependencies: {
-            "eslint-plugin-react-refresh": "^0.4.7"
+            "eslint-plugin-react-refresh": "^0.4.7",
+            "tailwindcss": "^3.4.3", // ADDED: Tailwind CSS
+            "postcss": "^8.4.38",     // ADDED: PostCSS
+            "autoprefixer": "^10.4.19" // ADDED: Autoprefixer
         },
         scripts: {
             start: 'react-scripts start',
