@@ -41,7 +41,7 @@ if (apiKeys.length === 0) {
     }
 }
 
-const models = (process.env.GEMINI_MODELS || "gemini-1.5-flash-latest,gemini-2.0-flash,gemini-2.5-flash").split(',');
+const models = (process.env.GEMINI_MODELS || "gemini-2.0-flash-latest,gemini-2.0-flash,gemini-2.0-flash").split(',');
 
 // 2. Create a pool of API clients.
 const clients = apiKeys.map(apiKey => new GoogleGenerativeAI(apiKey));
